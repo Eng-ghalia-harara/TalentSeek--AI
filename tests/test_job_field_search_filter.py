@@ -47,3 +47,21 @@ def test_all_field_search_keeps_documents_without_classification(monkeypatch) ->
     assert "d.metadata->'job_fields' ? %s" in connection.sql
     assert connection.params.count(None) == 8
     assert connection.sql.count("%s") == len(connection.params)
+
+
+def test_per_candidate_limit_keeps_one_section_result_per_candidate(monkeypatch) -> None:
+    connection = _FakeConnection()
+    monkeypatch.setattr(database, "get_connection", lambda: connection)
+
+    database.retrieve_chunks(
+        query_vector=[0.0],
+        query_text="training teams at AMIT",
+        section="Work Experience",
+        candidate_ids=[4, 9],
+        per_candidate_limit=1,
+    )
+
+    assert "PARTITION BY c.document_id" in connection.sql
+    assert connection.sql.count("WHERE candidate_rank <= %s") == 2
+    assert connection.params.count(1) == 2
+    assert connection.sql.count("%s") == len(connection.params)

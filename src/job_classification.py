@@ -13,6 +13,8 @@ JOB_TITLE_DICTIONARY: dict[str, dict[str, tuple[str, ...]]] = {
         "Chemical Engineer": ("chemical engineer", "مهندس كيميائي", "مهندسة كيميائية"),
     },
     "Software & IT": {
+        "Backend Engineer": ("backend engineer", "java backend engineer"),
+        "Java Developer": ("java developer",),
         "Software Engineer": ("software engineer", "مهندس برمجيات", "مهندسة برمجيات"),
         "Software Developer": ("software developer", "مطور برمجيات", "مطورة برمجيات"),
         "Backend Developer": ("backend developer", "back-end developer", "مطور خلفي"),
@@ -25,6 +27,10 @@ JOB_TITLE_DICTIONARY: dict[str, dict[str, tuple[str, ...]]] = {
         "Database Administrator": ("database administrator", "مدير قواعد بيانات"),
     },
     "Data & AI": {
+        "Machine Learning & Generative AI Trainee": (
+            "machine learning & generative ai trainee",
+            "machine learning and generative ai trainee",
+        ),
         "Data Analyst": ("data analyst", "محلل بيانات", "محللة بيانات"),
         "Data Scientist": ("data scientist", "عالم بيانات", "عالمة بيانات"),
         "Data Engineer": ("data engineer", "مهندس بيانات", "مهندسة بيانات"),
@@ -45,6 +51,14 @@ JOB_TITLE_DICTIONARY: dict[str, dict[str, tuple[str, ...]]] = {
         "Finance Manager": ("finance manager", "مدير مالي", "مديرة مالية"),
     },
     "Marketing": {
+        "Performance Marketing Specialist": ("performance marketing specialist",),
+        "CRM & Marketing Automation Specialist": (
+            "crm & marketing automation specialist",
+            "crm and marketing automation specialist",
+        ),
+        "CRM Specialist": ("crm specialist",),
+        "Marketing Operations Coordinator": ("marketing operations coordinator",),
+        "Digital Marketing Executive": ("digital marketing executive",),
         "Marketing Manager": ("marketing manager", "مدير تسويق", "مديرة تسويق"),
         "Digital Marketing Specialist": ("digital marketing specialist", "أخصائي تسويق رقمي"),
         "SEO Specialist": ("seo specialist", "أخصائي تحسين محركات البحث"),
@@ -139,7 +153,7 @@ def classify_job_profile(sections: dict[str, list[str]]) -> dict[str, Any]:
         "job_fields": ordered_fields,
         "job_titles": sorted(titles),
         "job_classification_sources": sorted(sources),
-        "job_classification_version": 1,
+        "job_classification_version": 2,
     }
 
 
@@ -148,9 +162,17 @@ def classify_job_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
     for chunk in chunks:
         metadata = chunk.get("metadata") or {}
         section_name = metadata.get("section")
-        if section_name not in sections:
-            continue
         text = str(chunk.get("text") or chunk.get("content") or "")
         text = re.sub(r"^Section:\s*[^\r\n]+\r?\n", "", text, count=1)
+        if section_name == "Unclassified" and int(chunk.get("chunk_index", -1)) == 0:
+            # Older indexed CVs used Unclassified for the initial identity/title header.
+            section_name = "Header"
+        relevant_experience = re.search(r"(?im)^\s*RELEVANT\s+EXPERIENCE\s*$", text)
+        if relevant_experience:
+            # Some older CVs placed this heading inside a different chunk section.
+            section_name = "Work Experience"
+            text = text[relevant_experience.end():]
+        if section_name not in sections:
+            continue
         sections[section_name].append(text)
     return classify_job_profile(sections)

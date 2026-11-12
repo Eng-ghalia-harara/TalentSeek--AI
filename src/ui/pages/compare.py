@@ -42,10 +42,10 @@ def render() -> None:
     if result:
         st.subheader("Comparison summary")
         st.write(result.get("summary", "No summary returned."))
-        questions = result.get("clarification_questions", [])
-        if questions:
-            st.subheader("Questions to refine the requirements")
-            for item in questions:
+        follow_up_suggestions = result.get("follow_up_suggestions", [])
+        if follow_up_suggestions:
+            st.subheader("Optional follow-ups to refine this comparison")
+            for item in follow_up_suggestions:
                 st.markdown(f"- {item}")
 
     st.subheader("Retrieved evidence by candidate")

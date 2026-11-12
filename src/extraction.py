@@ -6,6 +6,8 @@ from typing import Any
 
 import pymupdf
 
+from src.cv_sanitization import remove_nonrendered_pdf_text, sanitize_cv_text
+
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -27,12 +29,17 @@ def extract_pdf(pdf_path: Path) -> dict[str, Any]:
             raise ValueError("The PDF is password-protected.")
         page_count = len(document)
         for page_number, page in enumerate(document, start=1):
-            text = page.get_text("text", sort=True) or ""
+            text_spans = page.get_texttrace()
+            text = sanitize_cv_text(
+                remove_nonrendered_pdf_text(page.get_text("text", sort=True) or "", text_spans)
+            )
             blocks: list[dict[str, Any]] = []
             for block_number, block in enumerate(page.get_text("blocks", sort=True) or []):
                 if len(block) < 5:
                     continue
-                block_text = str(block[4]).strip()
+                block_text = sanitize_cv_text(
+                    remove_nonrendered_pdf_text(str(block[4]).strip(), text_spans)
+                )
                 if not block_text:
                     continue
                 blocks.append({

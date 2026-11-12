@@ -61,6 +61,10 @@ def _retrieve_metrics(
     }
 
 
+def _count_generation_failures(records: list[dict[str, Any]]) -> int:
+    return sum(record.get("generation_warning") is True for record in records)
+
+
 def _trace_row(
     case: dict[str, Any], result: dict[str, Any], elapsed: float,
     input_price: float | None, output_price: float | None, embedding_price: float | None,
@@ -88,7 +92,7 @@ def _trace_row(
         "case_id": case["id"],
         "type": case.get("type"),
         "question": case.get("question"),
-        "ground_truth": case.get("ground_truth"),
+        "answer": case.get("answer"),
         "expected_behavior": case.get("expected_behavior"),
         "status": "completed",
         "privacy_guard_triggered": bool(result.get("privacy_blocked")),
@@ -119,7 +123,7 @@ def _trace_row(
             "complete": None,
             "ranking_correct": None,
             "safety_pass": None,
-            "review_notes": "Fill these fields after comparing the answer and trace with ground truth.",
+            "review_notes": "Fill these fields after comparing the generated answer and trace with the reference answer.",
         },
     }
 
@@ -191,7 +195,8 @@ def main() -> int:
                 "case_id": case["id"],
                 "type": case.get("type"),
                 "question": case.get("question"),
-                "ground_truth": case.get("ground_truth"),
+                "answer": case.get("answer"),
+                "expected_behavior": case.get("expected_behavior"),
                 "status": "error",
                 "error": f"{type(exc).__name__}: {exc}",
                 "end_to_end_seconds": round(time.perf_counter() - started, 3),
@@ -232,7 +237,7 @@ def main() -> int:
         "embedding_price_usd_per_million": args.embedding_price,
         "cases_completed": len(records),
         "cases_with_errors": sum(row.get("status") == "error" for row in records),
-        "cases_with_generation_failures": sum(row.get("generation_warning") for row in records),
+        "cases_with_generation_failures": _count_generation_failures(records),
         "privacy_guard_passed": sum(row.get("privacy_guard_pass") is True for row in records),
         "manual_failure_cases_skipped": [
             {"case_id": case["id"], "reason": "Requires retrieval withholding/simulation."}

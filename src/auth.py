@@ -25,7 +25,7 @@ def require_user() -> dict[str, Any]:
         st.error("This account is no longer active. Sign in with an active account.")
 
     st.title("TalentSeek AI")
-    st.subheader("Sign in to the recruitment workspace")
+    st.markdown("### *Sign in to the recruitment workspace*")
     with st.form("login_form"):
         role = st.selectbox(
             "Role",

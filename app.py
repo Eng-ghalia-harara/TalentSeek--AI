@@ -4,7 +4,7 @@ import streamlit as st
 
 from src.auth import require_user
 from src.ui.styles import apply_styles
-from src.ui.pages import dashboard, upload, search, compare, documents, users, settings
+from src.ui.pages import dashboard, upload, search, compare, documents, users
 
 st.set_page_config(
     page_title="TalentSeek AI",
@@ -31,7 +31,6 @@ workspace_pages = [
     st.Page(search.render, title="Candidate Search", url_path="candidate-search", icon=":material/search:"),
     st.Page(compare.render, title="Compare Candidates", url_path="compare-candidates", icon=":material/groups:"),
     st.Page(documents.render, title="CV Documents", url_path="cv-documents", icon=":material/folder_open:"),
-    st.Page(settings.render, title="Settings", url_path="settings", icon=":material/settings:"),
 ]
 admin_pages = [
     st.Page(

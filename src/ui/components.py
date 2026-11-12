@@ -6,9 +6,20 @@ from typing import Any
 import streamlit as st
 
 
-def render_candidate_card(candidate: dict[str, Any], rank: int) -> None:
+def render_candidate_card(
+    candidate: dict[str, Any],
+    rank: int,
+    show_contact_details: bool = False,
+) -> None:
     st.markdown(f"### {rank}. {candidate['candidate_label']}")
-    st.caption(f"{candidate['file_name']} · Retrieval score: {candidate['score']:.5f}")
+    st.caption(candidate["file_name"])
+    contact_details = candidate.get("contact_details", {})
+    if show_contact_details and contact_details:
+        st.markdown("**Contact details**")
+        for email in contact_details.get("emails", []):
+            st.write(f"Email: {email}")
+        for phone in contact_details.get("phones", []):
+            st.write(f"Phone: {phone}")
     for index, evidence in enumerate(candidate.get("evidence", []), start=1):
         pages = evidence.get("page_nums") or [evidence.get("page_num") or "—"]
         with st.expander(

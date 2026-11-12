@@ -69,9 +69,12 @@ The current prototype uses one shared local password for each role. It does not 
 - Combine semantic vector search with PostgreSQL text search.
 - Merge and rank results from both search methods.
 - Group retrieved chunks by CV so one candidate is not shown multiple times.
-- Send a limited set of candidate evidence to Gemini for a summary and initial assessment.
+- Send up to four retrieved evidence chunks per candidate by default to Gemini for a summary and initial assessment (from up to 40 retrieved chunks overall).
+- Classify fit as meets, partial, unclear, or does not meet, and make clear that the assessment is limited to retrieved evidence.
 - Show the supporting excerpt, section, and page.
 - Stream the summary to the interface as it is generated.
+- Allow Admins and Recruiters to explicitly request contact details for displayed candidates assessed as meeting the criteria. Contact details are kept out of Gemini; database-wide contact exports are blocked.
+- Filter known boilerplate and high-confidence ranking directives from CV text, and omit hidden or tiny PDF text spans. These are targeted mitigations, not a guarantee of detecting every misleading instruction.
 
 ### Shortlists and comparison
 
@@ -120,6 +123,8 @@ The current prototype uses one shared local password for each role. It does not 
 | pgvector | Stores embeddings and supports vector search. |
 | Python | Runs validation, chunking, retrieval, and app logic. |
 
+The generation model is configured through `GENERATION_MODEL`; its code default is `gemini-3.1-flash-lite`. The effective model can differ when `.env` overrides that value.
+
 ## 8. Data and evidence
 
 The `documents` table stores CV records. The `chunks` table stores text, page and section metadata, and embeddings. The app also uses `app_users` for local roles and `ingestion_events` for processing history.
@@ -137,6 +142,8 @@ Search results include source excerpts so recruiters can check why a result appe
 - A short candidate list and an initial Gemini assessment.
 - Follow-up questions that refine the current shortlist.
 - Streamlit interface with Admin and Recruiter roles.
+- Explicit contact-detail requests for matching candidates, with no contact data sent to Gemini and no database-wide contact exports.
+- Targeted filtering of known boilerplate and high-confidence ranking instructions in CV text.
 
 ### Limits to consider
 
@@ -146,6 +153,8 @@ Search results include source excerpts so recruiters can check why a result appe
 - Image-only PDFs are not supported because OCR is not included.
 - Missing evidence in retrieved text does not prove a person lacks a skill.
 - Gemini may be unavailable or slow. In that case, the app can show retrieval results without a completed AI assessment.
+- Contact details are disclosed only after a successful assessment, for displayed candidates marked `meets`, and only on explicit request. Bulk contact exports are blocked.
+- CV sanitization targets known patterns and is not a guarantee that every misleading or malicious instruction will be detected.
 - The recruiter remains responsible for checking qualifications and making the final decision.
 
 ## 10. Expected value
@@ -174,9 +183,9 @@ These are possible improvements, not all current features:
 1. **Improve retrieval:** evaluate real questions and tune candidate count, chunk count, and semantic/keyword balance.
 2. **Support more documents:** study OCR and better handling of multi-column layouts.
 3. **Recognize more headings:** add aliases based on real CVs and test Arabic and English headings.
-4. **Improve evaluation:** show evidence for each assessment and separate confirmed facts from missing evidence.
+4. **Strengthen evaluation:** automatically validate citations, distinguish explicit facts from estimates, and add runnable withheld-CV/chunk cases instead of skipping them.
 5. **Improve user accounts:** replace shared role passwords with individual accounts or a company sign-in provider.
-6. **Improve operations:** track external service time, failures, and cost, and set backup and data-retention rules.
+6. **Improve operations:** strengthen monitoring for external service availability, connection errors, timeouts, and cost, and set backup and data-retention rules.
 7. **Test with recruiters:** run structured user sessions and prioritize changes based on the results.
 
 ## 13. Main files for technical review

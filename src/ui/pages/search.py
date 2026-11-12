@@ -3,10 +3,11 @@ import re
 import streamlit as st
 
 from src.auth import current_user
-from src.database import list_job_fields
+from src.database import get_job_field_counts
 from src.job_classification import JOB_FIELD_LABELS
 from src.search import search_candidates
 from src.ui.components import render_candidate_card
+from src.safety import can_access_candidate_contact_data
 
 
 def _clear_search_on_field_change() -> None:
@@ -19,7 +20,7 @@ def _clear_search_on_field_change() -> None:
         "refinement_scope_ids",
         "refinement_history",
         "refinement_count",
-        "active_clarification",
+        "active_follow_up",
         "comparison_candidates",
     ):
         st.session_state.pop(key, None)
@@ -28,20 +29,29 @@ def _clear_search_on_field_change() -> None:
 def render() -> None:
     st.title("Candidate Search")
     st.caption("Search the shared CV knowledge base in Arabic or English.")
-    available_fields = ["All fields", *list_job_fields()]
+    field_data = get_job_field_counts()
+    field_counts = field_data["field_counts"]
+    available_fields = ["All fields", *field_counts]
     filter_key = "candidate_search_job_field"
     if st.session_state.get(filter_key) not in available_fields:
         st.session_state[filter_key] = "All fields"
-    selected_job_field = st.selectbox(
-        "Filter by candidate field",
-        options=available_fields,
-        format_func=lambda value: (
-            value if value == "All fields" else JOB_FIELD_LABELS.get(value, value)
-        ),
-        key=filter_key,
-        on_change=_clear_search_on_field_change,
-        help="Fields are detected from CV headers and work-experience job titles.",
-    )
+    field_column, count_column = st.columns([3, 2])
+    with field_column:
+        selected_job_field = st.selectbox(
+            "Filter by candidate field",
+            options=available_fields,
+            format_func=lambda value: (
+                value if value == "All fields" else JOB_FIELD_LABELS.get(value, value)
+            ),
+            key=filter_key,
+            on_change=_clear_search_on_field_change,
+            help="Fields are detected from CV headers and work-experience job titles.",
+        )
+    with count_column:
+        if selected_job_field == "All fields":
+            st.metric("Indexed CV files", field_data["total_documents"])
+        else:
+            st.metric("CV files in selected field", field_counts.get(selected_job_field, 0))
     question = st.text_area(
         "Recruitment requirements",
         placeholder="مثال: أحتاج مهندس تعلم آلي لديه خبرة في Python وFastAPI ونشر النماذج باستخدام Docker.",
@@ -61,6 +71,7 @@ def render() -> None:
                     question,
                     job_field=None if selected_job_field == "All fields" else selected_job_field,
                     on_summary_update=lambda text: summary_placeholder.markdown(text),
+                    user_role=current_user().get("role"),
                 )
                 st.session_state["last_search_result"] = result
                 st.session_state["last_search_question"] = question
@@ -75,14 +86,15 @@ def render() -> None:
                 )
                 st.session_state["refinement_history"] = []
                 st.session_state["refinement_count"] = 0
-                st.session_state.pop("active_clarification", None)
+                st.session_state.pop("active_follow_up", None)
             except Exception as exc:
                 st.error(f"Search failed: {exc}")
                 return
 
     result = st.session_state.get("last_search_result")
     if not result:
-        st.info("Enter recruitment requirements to search the CV knowledge base.")
+        if current_user().get("role") == "admin":
+            st.info("Enter recruitment requirements to search the CV knowledge base.")
         return
 
     final_summary = result.get("summary") or "No generated summary is available."
@@ -106,7 +118,7 @@ def render() -> None:
             unsafe_allow_html=True,
         )
     candidates = result.get("candidates", [])
-    requested_count = max(1, min(int(result.get("requested_count", 1)), 3))
+    requested_count = min(max(0, int(result.get("requested_count", 1))), len(candidates))
     displayed_candidates = candidates[:requested_count]
     assessments = result.get("candidate_assessments", {})
     if result.get("generation_warning"):
@@ -122,10 +134,27 @@ def render() -> None:
             with st.expander(expander_label):
                 st.code(generation_error)
     elif not result.get("privacy_blocked"):
-        if requested_count == 1:
-            st.subheader("Recommended candidate")
+        if result.get("search_mode") == "filter":
+            st.subheader(f"Matching candidates ({len(displayed_candidates)})")
+        elif result.get("search_mode") == "rank":
+            st.subheader("Ranked candidates")
+        elif requested_count == 1:
+            only_candidate_status = assessments.get(
+                int(displayed_candidates[0]["document_id"]), {}
+            ).get("fit_status")
+            st.subheader(
+                "Recommended candidate"
+                if only_candidate_status == "meets"
+                else "Relevant candidate"
+            )
         else:
             st.subheader("Relevant candidates")
+    if result.get("contact_disclosure_denied"):
+        st.info(
+            "بيانات التواصل متاحة للمسؤولين فقط."
+            if is_arabic_search
+            else "Contact details are available to administrators only."
+        )
     initial_ids = st.session_state.get("initial_shortlist_ids", [])
     if st.session_state.get("refinement_count", 0):
         st.caption(f"Refined within the original shortlist of {len(initial_ids)} candidates.")
@@ -135,28 +164,34 @@ def render() -> None:
         elif st.session_state.get("refinement_count", 0):
             st.warning("No candidates in the original shortlist matched this refinement. Try a broader follow-up or start a new search.")
         else:
-            st.warning("No relevant CV evidence was found. Try broader or more specific requirements.")
+            st.warning("No candidates had evidence supporting all or part of these requirements. Try broader or more specific requirements.")
     if displayed_candidates:
         for rank, candidate in enumerate(displayed_candidates, start=1):
             assessment = assessments.get(int(candidate["document_id"]))
             if assessment:
                 status = assessment["fit_status"].replace("_", " ").title()
                 st.markdown(f"**Evidence fit: {status}.** {assessment.get('reason', '')}")
-            render_candidate_card(candidate, rank)
+            render_candidate_card(
+                candidate,
+                rank,
+                show_contact_details=can_access_candidate_contact_data(
+                    current_user().get("role")
+                ),
+            )
 
-    questions = result.get("clarification_questions", [])
+    follow_up_suggestions = result.get("follow_up_suggestions", [])
     if candidates:
-        st.subheader("Refine this shortlist or ask a follow-up")
-        if questions:
-            st.caption("Choose a suggested clarification, or write your own follow-up below.")
-            for index, question_text in enumerate(questions):
-                if st.button(question_text, key=f"clarification_{index}"):
-                    st.session_state["active_clarification"] = question_text
+        st.subheader("Refine this candidate list")
+        if follow_up_suggestions:
+            st.caption("Optional follow-ups can apply additional filters to this list.")
+            for index, question_text in enumerate(follow_up_suggestions):
+                if st.button(question_text, key=f"follow_up_{index}"):
+                    st.session_state["active_follow_up"] = question_text
                     st.rerun()
 
-        active_clarification = st.session_state.get("active_clarification")
-        if active_clarification:
-            st.info(f"Clarification selected: {active_clarification}")
+        active_follow_up = st.session_state.get("active_follow_up")
+        if active_follow_up:
+            st.info(f"Follow-up selected: {active_follow_up}")
 
         refinement_count = int(st.session_state.get("refinement_count", 0))
         with st.form(f"shortlist_refinement_{refinement_count}"):
@@ -164,7 +199,7 @@ def render() -> None:
                 "Your answer or follow-up question",
                 placeholder=(
                     "For example: A master's degree in progress is acceptable, and remote training is fine."
-                    if active_clarification
+                    if active_follow_up
                     else "For example: Does this candidate's CV show training experience?"
                 ),
                 key=f"shortlist_refinement_text_{refinement_count}",
@@ -180,10 +215,10 @@ def render() -> None:
                 st.warning("Enter an answer or follow-up question first.")
             else:
                 original_question = st.session_state.get("initial_search_question", "")
-                if active_clarification:
+                if active_follow_up:
                     refinement_item = (
-                        f"Clarification: {active_clarification}\n"
-                        f"Recruiter's answer: {response.strip()}"
+                        f"Requested list refinement: {active_follow_up}\n"
+                        f"Recruiter's preference: {response.strip()}"
                     )
                 else:
                     refinement_item = f"Follow-up about the shortlisted candidates: {response.strip()}"
@@ -207,6 +242,7 @@ def render() -> None:
                                 else st.session_state["last_search_job_field"]
                             ),
                             on_summary_update=lambda text: summary_placeholder.markdown(text),
+                            user_role=current_user().get("role"),
                         )
                         st.session_state["last_search_result"] = refined_result
                         st.session_state["last_search_question"] = refinement_query
@@ -216,7 +252,7 @@ def render() -> None:
                             [int(candidate["document_id"]) for candidate in refined_result.get("candidates", [])],
                         )
                         st.session_state["refinement_count"] = refinement_count + 1
-                        st.session_state.pop("active_clarification", None)
+                        st.session_state.pop("active_follow_up", None)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Could not refine the shortlist: {exc}")

@@ -1,14 +1,35 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from typing import Any, Callable
 
-from google import genai
-from google.genai import types
+from groq import Groq
 
 from src.config import GENERATION_MODEL
-from src.gemini_client import call_with_gemini_key
 from src.timing import timed
+
+
+def _configured_groq_api_keys() -> list[str]:
+    keys = [
+        key.strip()
+        for key in re.split(r"[,;\r\n]", os.getenv("GROQ_API_KEYS", ""))
+        if key.strip()
+    ]
+    single_key = os.getenv("GROQ_API_KEY", "").strip()
+    if single_key:
+        keys.append(single_key)
+    numbered_keys = sorted(
+        (
+            (int(match.group(1)), value.strip())
+            for name, value in os.environ.items()
+            if (match := re.fullmatch(r"GROQ_API_KEY_?(\d+)", name)) and value.strip()
+        ),
+        key=lambda item: item[0],
+    )
+    keys.extend(value for _, value in numbered_keys)
+    return list(dict.fromkeys(keys))
 
 
 def _partial_json_string(text: str, key: str) -> str | None:
@@ -59,53 +80,60 @@ def generate_json(
 ) -> dict[str, Any]:
     """Generate a compact JSON response with a bounded request time."""
     try:
-        def generate_with_client(client: genai.Client) -> tuple[list[str], dict[str, int]]:
-            response_text: list[str] = []
-            last_summary = ""
-            usage: dict[str, int] = {}
-            stream = client.models.generate_content_stream(
-                model=GENERATION_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(
-                        thinking_level=types.ThinkingLevel.LOW
-                    ),
-                ),
+        if GENERATION_MODEL.startswith("gemini-"):
+            raise RuntimeError(
+                f"GENERATION_MODEL={GENERATION_MODEL!r} is a Gemini model ID; "
+                "Groq generation needs a Groq model ID such as 'openai/gpt-oss-120b'. "
+                "Restart the app after changing .env."
             )
-            for chunk in stream:
-                text_chunk = getattr(chunk, "text", None) or ""
-                chunk_usage = getattr(chunk, "usage_metadata", None)
-                if chunk_usage is not None:
-                    for source, target in (
-                        ("prompt_token_count", "prompt_tokens"),
-                        ("candidates_token_count", "output_tokens"),
-                        ("total_token_count", "total_tokens"),
-                    ):
-                        value = getattr(chunk_usage, source, None)
-                        if value is not None:
-                            usage[target] = int(value)
-                if not text_chunk:
-                    continue
-                response_text.append(text_chunk)
-                if on_summary_update is not None:
-                    summary = _partial_json_string("".join(response_text), "summary")
-                    if summary is not None and summary != last_summary:
-                        on_summary_update(summary)
-                        last_summary = summary
-            return response_text, usage
+        api_keys = _configured_groq_api_keys()
+        if not api_keys:
+            raise RuntimeError("No Groq API keys are configured.")
 
-        with timed("Gemini generation API request"):
-            response_text, usage = call_with_gemini_key(generate_with_client)
+        last_error: Exception | None = None
+        for api_key in api_keys:
+            try:
+                response_text: list[str] = []
+                last_summary = ""
+                usage: dict[str, int] = {}
+                with timed("Groq generation API request"):
+                    stream = Groq(api_key=api_key).chat.completions.create(
+                        model=GENERATION_MODEL,
+                        messages=[{"role": "user", "content": prompt}],
+                        response_format={"type": "json_object"},
+                        stream=True,
+                    )
+                    for chunk in stream:
+                        if chunk.usage is not None:
+                            usage = {
+                                "prompt_tokens": chunk.usage.prompt_tokens,
+                                "output_tokens": chunk.usage.completion_tokens,
+                                "total_tokens": chunk.usage.total_tokens,
+                            }
+                        if not chunk.choices:
+                            continue
+                        text_chunk = chunk.choices[0].delta.content or ""
+                        if not text_chunk:
+                            continue
+                        response_text.append(text_chunk)
+                        if on_summary_update is not None:
+                            summary = _partial_json_string("".join(response_text), "summary")
+                            if summary is not None and summary != last_summary:
+                                on_summary_update(summary)
+                                last_summary = summary
 
-        text = "".join(response_text).strip()
-        if not text:
-            raise ValueError("Gemini returned an empty response.")
-        data = json.loads(text)
-        if not isinstance(data, dict):
-            raise ValueError("Expected a JSON object from Gemini.")
-        if usage:
-            data["_usage"] = usage
-        return data
+                text = "".join(response_text).strip()
+                if not text:
+                    raise ValueError("Groq returned an empty response.")
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise ValueError("Expected a JSON object from Groq.")
+                if usage:
+                    data["_usage"] = usage
+                return data
+            except Exception as exc:
+                last_error = exc
+
+        raise RuntimeError(f"All configured Groq keys failed: {last_error}") from last_error
     except Exception as exc:
         raise RuntimeError(f"Generation failed: {exc}") from exc

@@ -93,11 +93,35 @@ def get_document(document_id: int) -> dict[str, Any] | None:
         return conn.execute("SELECT * FROM documents WHERE id = %s", (document_id,)).fetchone()
 
 
+def get_candidate_contact_texts(document_ids: list[int]) -> dict[int, list[str]]:
+    ids = list(dict.fromkeys(int(document_id) for document_id in document_ids))
+    if not ids:
+        return {}
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT c.document_id, c.content
+               FROM chunks c
+               JOIN documents d ON d.id = c.document_id
+               WHERE d.status = 'ready' AND c.document_id = ANY(%s::int[])
+               ORDER BY c.document_id, c.chunk_index""",
+            (ids,),
+        ).fetchall()
+    texts: dict[int, list[str]] = {}
+    for row in rows:
+        texts.setdefault(int(row["document_id"]), []).append(str(row["content"]))
+    return texts
+
+
 def list_documents() -> list[dict[str, Any]]:
     with get_connection() as conn:
         return conn.execute("""
             SELECT d.id, d.title, d.source_uri, d.content_hash, d.status,
                    d.mime_type, d.created_at, d.updated_at,
+                   CASE
+                       WHEN jsonb_typeof(d.metadata->'job_fields') = 'array'
+                       THEN d.metadata->'job_fields'
+                       ELSE '[]'::jsonb
+                   END AS job_fields,
                    COUNT(c.id) AS chunk_count
             FROM documents d
             LEFT JOIN chunks c ON c.document_id = d.id
@@ -122,6 +146,32 @@ def list_job_fields() -> list[str]:
             ORDER BY job_field
         """).fetchall()
     return [str(row["job_field"]) for row in rows]
+
+
+def get_job_field_counts() -> dict[str, Any]:
+    """Return ready-document counts by classified field and the overall ready count."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT field.value AS job_field, COUNT(DISTINCT d.id) AS document_count
+            FROM documents d
+            CROSS JOIN LATERAL jsonb_array_elements_text(
+                CASE
+                    WHEN jsonb_typeof(d.metadata->'job_fields') = 'array'
+                    THEN d.metadata->'job_fields'
+                    ELSE '[]'::jsonb
+                END
+            ) AS field(value)
+            WHERE d.status = 'ready'
+            GROUP BY field.value
+            ORDER BY field.value
+        """).fetchall()
+        total = conn.execute(
+            "SELECT COUNT(*) AS document_count FROM documents WHERE status = 'ready'"
+        ).fetchone()["document_count"]
+    return {
+        "field_counts": {str(row["job_field"]): int(row["document_count"]) for row in rows},
+        "total_documents": int(total),
+    }
 
 
 def update_document_job_profile(document_id: int, profile: dict[str, Any]) -> None:
@@ -251,20 +301,26 @@ def retrieve_chunks(
     section: str | None = None,
     candidate_ids: list[int] | None = None,
     job_field: str | None = None,
+    per_candidate_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid SQL search: cosine vector retrieval + PostgreSQL full-text retrieval + RRF."""
+    if per_candidate_limit is not None and per_candidate_limit < 1:
+        raise ValueError("per_candidate_limit must be at least 1.")
     if candidate_ids is not None:
         candidate_ids = list(dict.fromkeys(int(candidate_id) for candidate_id in candidate_ids))
         if not candidate_ids:
             return []
     candidate_filter = " AND c.document_id = ANY(%s::int[])" if candidate_ids is not None else ""
+    per_candidate_filter = (
+        "WHERE candidate_rank <= %s" if per_candidate_limit is not None else ""
+    )
     sql = """
     WITH q AS (
         SELECT plainto_tsquery('simple', %s) AS tsq
     ),
-    semantic AS (
-        SELECT c.id AS chunk_id,
-               ROW_NUMBER() OVER (ORDER BY c.embedding <=> %s) AS rank
+    semantic_scored AS (
+        SELECT c.id AS chunk_id, c.document_id,
+               c.embedding <=> %s AS distance
         FROM chunks c
         JOIN documents d ON d.id = c.document_id
         WHERE d.status = 'ready'
@@ -273,7 +329,19 @@ def retrieve_chunks(
           AND (%s::text IS NULL OR c.metadata->>'section' = %s)
           AND (%s::text IS NULL OR d.metadata->'job_fields' ? %s)
           {candidate_filter}
-        ORDER BY c.embedding <=> %s
+    ),
+    semantic_ranked AS (
+        SELECT chunk_id, document_id, distance,
+               ROW_NUMBER() OVER (
+                   PARTITION BY document_id ORDER BY distance, chunk_id
+               ) AS candidate_rank
+        FROM semantic_scored
+    ),
+    semantic AS (
+        SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY distance) AS rank
+        FROM semantic_ranked
+        {per_candidate_filter}
+        ORDER BY distance
         LIMIT %s
     ),
     keyword_base AS (
@@ -305,16 +373,29 @@ def retrieve_chunks(
         SELECT chunk_id, SUM(1.0 / (60 + rank)) AS rrf_score
         FROM combined
         GROUP BY chunk_id
+    ),
+    ranked AS (
+        SELECT c.id AS chunk_id, c.document_id, d.title, d.source_uri,
+               d.metadata->>'file_name' AS file_name,
+               c.content, c.metadata, c.token_count, fused.rrf_score,
+               ROW_NUMBER() OVER (
+                   PARTITION BY c.document_id
+                   ORDER BY fused.rrf_score DESC, c.id
+               ) AS candidate_rank
+        FROM fused
+        JOIN chunks c ON c.id = fused.chunk_id
+        JOIN documents d ON d.id = c.document_id
     )
-    SELECT c.id AS chunk_id, c.document_id, d.title, d.source_uri,
-           d.metadata->>'file_name' AS file_name,
-           c.content, c.metadata, c.token_count, fused.rrf_score
-    FROM fused
-    JOIN chunks c ON c.id = fused.chunk_id
-    JOIN documents d ON d.id = c.document_id
-    ORDER BY fused.rrf_score DESC
+    SELECT chunk_id, document_id, title, source_uri, file_name,
+           content, metadata, token_count, rrf_score
+    FROM ranked
+    {per_candidate_filter}
+    ORDER BY rrf_score DESC
     LIMIT %s
-    """.format(candidate_filter=candidate_filter)
+    """.format(
+        candidate_filter=candidate_filter,
+        per_candidate_filter=per_candidate_filter,
+    )
     params = [
         query_text,
         Vector(query_vector),
@@ -322,12 +403,14 @@ def retrieve_chunks(
     ]
     if candidate_ids is not None:
         params.append(candidate_ids)
-    params.extend([Vector(query_vector), top_k, section, section, job_field, job_field])
+    if per_candidate_limit is not None:
+        params.append(per_candidate_limit)
+    params.extend([top_k, section, section, job_field, job_field])
     if candidate_ids is not None:
         params.append(candidate_ids)
-    params.extend([
-        top_k,
-        top_k,
-    ])
+    params.append(top_k)
+    if per_candidate_limit is not None:
+        params.append(per_candidate_limit)
+    params.append(top_k)
     with get_connection() as conn:
         return conn.execute(sql, params).fetchall()

@@ -13,11 +13,10 @@ def render() -> None:
         st.error(f"Could not load dashboard data: {exc}")
         return
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric("CV documents", stats["documents"])
     c2.metric("Ready for search", stats["ready"])
-    c3.metric("Indexed chunks", stats["chunks"])
-    c4.metric("Rejected · last 30 days", stats["rejected_30d"])
+    c3.metric("Rejected · last 30 days", stats["rejected_30d"])
 
     st.subheader("Database connection")
     st.success(f"Connected to PostgreSQL database: {db_info['database']}")

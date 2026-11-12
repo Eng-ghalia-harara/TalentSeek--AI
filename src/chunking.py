@@ -8,6 +8,7 @@ from src.gemini_tokens import count_gemini_tokens
 
 # ATS/CV section aliases. Extend conservatively when real CVs reveal new headings.
 SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("Work Experience", re.compile(r"^relevant\s+experience$", re.I)),
     ("Professional Summary", re.compile(r"^(professional\s+summary|career\s+summary|summary|profile|professional\s+profile|career\s+objective|objective|about\s+me|ملخص\s+مهني|الملخص\s+المهني|نبذة\s+عني|الهدف\s+المهني)$", re.I)),
     ("Skills", re.compile(r"^(core\s+skills|technical\s+skills|key\s+skills|skills|core\s+competencies|competencies|مهارات|المهارات|المهارات\s+التقنية|المهارات\s+الشخصية|الكفاءات)$", re.I)),
     ("Work Experience", re.compile(r"^(work\s+experience|professional\s+experience|employment\s+history|experience|career\s+history|الخبرات\s+العملية|الخبرة\s+العملية|الخبرات\s+المهنية|الخبرة\s+المهنية|الخبرات)$", re.I)),

@@ -11,6 +11,20 @@ from src.extraction import sha256_bytes
 from src.storage import remove_file
 
 
+def _document_table_rows(docs: list[dict]) -> list[dict]:
+    return [
+        {
+            "ID": d["id"],
+            "CV": d["title"],
+            "Job field(s)": ", ".join(d.get("job_fields") or []) or "Unclassified",
+            "Status": d["status"],
+            "Chunks": d["chunk_count"],
+            "Updated": d["updated_at"],
+        }
+        for d in docs
+    ]
+
+
 def render() -> None:
     st.title("CV Documents")
     st.caption("Manage the current CV files in the shared knowledge base.")
@@ -19,15 +33,12 @@ def render() -> None:
         st.info("Only administrators can replace or delete CV documents. Recruiters can search and compare them.")
         docs = list_documents()
         if docs:
-            st.dataframe([{"ID": d["id"], "CV": d["title"], "Status": d["status"], "Chunks": d["chunk_count"], "Updated": d["updated_at"]} for d in docs], use_container_width=True, hide_index=True)
+            st.dataframe(_document_table_rows(docs), use_container_width=True, hide_index=True)
         return
 
     docs = list_documents()
     if docs:
-        st.dataframe([
-            {"ID": d["id"], "CV": d["title"], "Status": d["status"], "Chunks": d["chunk_count"], "Updated": d["updated_at"]}
-            for d in docs
-        ], use_container_width=True, hide_index=True)
+        st.dataframe(_document_table_rows(docs), use_container_width=True, hide_index=True)
     else:
         st.info("No CV documents are indexed yet.")
         return

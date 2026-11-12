@@ -30,12 +30,13 @@ EXTRACTION_METHOD = "pymupdf"
 CHUNKING_STRATEGY = "section"
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 EMBEDDING_DIM = env_int("EMBEDDING_DIM", 768)
-GENERATION_MODEL = os.getenv("GENERATION_MODEL", "gemini-3.1-flash-lite")
+GENERATION_MODEL = os.getenv("GENERATION_MODEL", "openai/gpt-oss-120b")
 
 # Section chunking: sections stay intact where possible. Very long sections
 # are split conservatively before Gemini Embedding 2's 8192-token input limit.
 MAX_SECTION_TOKENS = env_int("MAX_SECTION_TOKENS", 6000)
-TOKEN_COUNT_MODEL = os.getenv("TOKEN_COUNT_MODEL", GENERATION_MODEL)
+# Token counting still uses Google's API, independently of the generation provider.
+TOKEN_COUNT_MODEL = os.getenv("TOKEN_COUNT_MODEL", "gemini-3.1-flash-lite")
 
 # Upload and storage
 MAX_UPLOAD_MB = env_int("MAX_UPLOAD_MB", 15)
@@ -49,7 +50,7 @@ CACHE_DIR = env_path("CACHE_DIR", "cache")
 # Retrieval
 DEFAULT_TOP_K = env_int("DEFAULT_TOP_K", 3)
 RETRIEVAL_FETCH_K = env_int("RETRIEVAL_FETCH_K", 40)
-MAX_EVIDENCE_PER_CANDIDATE = env_int("MAX_EVIDENCE_PER_CANDIDATE", 2)
+MAX_EVIDENCE_PER_CANDIDATE = env_int("MAX_EVIDENCE_PER_CANDIDATE", 4)
 
 # Each role uses one shared password configured outside the source tree.
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")

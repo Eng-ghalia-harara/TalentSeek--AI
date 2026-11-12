@@ -7,8 +7,10 @@ TalentSeek AI helps recruiters search a shared set of CVs in Arabic or English. 
 - Upload and validate PDF CVs.
 - Extract text with PyMuPDF and split it by CV sections.
 - Search with both semantic vectors and PostgreSQL text search.
-- Show the source file, page, section, and matching text.
+- Assess candidate fit against the request and show the source file, page, section, and matching text.
 - Compare candidates and refine a shortlist with follow-up questions.
+- Let Admins and Recruiters explicitly request CV-provided contact details for candidates assessed as meeting the search criteria. Database-wide contact exports are blocked.
+- Filter known boilerplate and high-confidence ranking instructions from CV text, including hidden or tiny PDF text spans.
 - Use Admin and Recruiter roles.
 - Replace or delete CVs while keeping the database and stored files in sync.
 
@@ -88,8 +90,11 @@ The app extracts text, splits it into sections, creates embeddings, and stores t
 3. Review the candidates and the CV evidence shown with each result.
 4. Use follow-up questions to refine the shortlist.
 5. Open **Compare Candidates** to compare two to five selected candidates.
+6. Admins and Recruiters can explicitly ask for contact details for candidates assessed as meeting the criteria. Contact details are retrieved separately from model evidence; requests to export contacts for all candidates are blocked.
 
-The model only receives the evidence retrieved for the search. A missing result does not prove that a candidate lacks the skill; the relevant evidence may not have been retrieved. Always review the original CV before making a decision.
+The model only receives the evidence retrieved for the search (up to four chunks per candidate by default). A missing result does not prove that a candidate lacks the skill; the relevant evidence may not have been retrieved. If generation fails, the app may show retrieval matches with a warning instead of an AI assessment. Always review the original CV before making a decision.
+
+CV text is filtered for known boilerplate and high-confidence candidate-ranking directives before it is used in search and generation. This is a targeted mitigation, not a guarantee that every malicious or misleading instruction can be detected.
 
 ### Replace or delete a CV
 
@@ -103,7 +108,13 @@ The evaluation questions and reference answers are in `reports/rag_evaluation_da
 python -m src.evaluate_rag --interval-seconds 10
 ```
 
-The runner sends questions one at a time and waits ten seconds between them. It saves a readable JSON trace and a summary under `reports/rag_evaluation_runs/`. Two failure cases require manually withholding a CV or chunk, so the runner skips them. Generation grounding, answer completeness, ranking quality, and some safety checks still need human review. Gemini token use is recorded when available; cost is only estimated when model prices are provided.
+To run one case only, for example:
+
+```powershell
+python -m src.evaluate_rag --case-id RAG-06 --interval-seconds 0
+```
+
+The runner sends questions one at a time and waits ten seconds between them. It saves a readable JSON trace and a summary under `reports/rag_evaluation_runs/`. Cases that require manually withholding a CV or chunk are skipped by the runner. Generation grounding, answer completeness, ranking quality, and some safety checks still need human review. Gemini token use is recorded when available; cost is only estimated when model prices are provided.
 
 ## Export extracted text or chunks
 
@@ -137,13 +148,13 @@ The current checks are internal file checks, not a certification for commercial 
 
 ## Tests
 
-Run the existing tests from the project folder with:
+Run the automated tests from the project folder with:
 
 ```powershell
 python -m pytest
 ```
 
-The current tests cover password checks, section chunking, and database connectivity.
+The tests cover CV processing and sanitization, candidate evidence grouping, contact-request handling, evaluation reporting, job-field classification, password checks, and database connectivity.
 
 ## Project layout
 
